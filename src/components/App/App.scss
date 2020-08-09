@@ -1,0 +1,18 @@
+.App {
+  background: rgba(0, 0, 0, 0);
+  color: #FFFFFF;
+  display: grid;
+  grid-template-columns: 250px auto;
+
+  .App-Left-Sidebar {
+    background: #282828;
+  }
+
+  .App-Main-Content {
+    overflow: hidden;
+    .App-Tetrax {
+      overflow: hidden;
+      height: 100vh !important;
+    }
+  }
+}
