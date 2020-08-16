@@ -2,6 +2,7 @@ import React, { Component } from "react";
 import Tetrax from "../Tetrax";
 import Game from "../../lib/Tetrax";
 import p5Types from "p5";
+import Delaunator from "delaunator";
 import { PubSub, vectorHash, map } from "../../lib/Util";
 import { stars, starType } from "../../lib/Tetrax/Map/constants";
 import p5 from "p5";
@@ -18,6 +19,7 @@ interface ComponentState {
     mouseWheelDelta: number;
     galaxy: Array<p5Types.Vector>;
     spiral: Array<p5Types.Vector>;
+    lanes: { (): any }[];
     width: number;
     height: number;
     font: string;
@@ -26,11 +28,11 @@ interface ComponentState {
 class App extends Component {
     private readonly _matrixSize: number;
     state: ComponentState;
-    private purpleDust: p5Types.Image | undefined;
+    private dust: p5Types.Image | undefined;
     private blueStar: p5Types.Image | undefined;
     private galaxyCore: p5Types.Image | undefined;
     private sg: p5Types.Graphics | undefined;
-    private pd: p5Types.Graphics | undefined;
+    private dg: p5Types.Graphics | undefined;
     private cg: p5Types.Graphics | undefined;
     private readonly _logStuff: { [key: string]: any };
 
@@ -48,6 +50,7 @@ class App extends Component {
             mouseWheelDelta: 0,
             galaxy: [],
             spiral: [],
+            lanes: [],
             width: 500,
             height: 500,
             font: ""
@@ -192,31 +195,9 @@ class App extends Component {
         // This puts the p5 object into the component state
         this.setState({ ...this.state, ...info, p5, font: VT323 });
 
-        this.purpleDust = p5.loadImage("/assets/images/purple-dust.png");
+        this.dust = p5.loadImage("/assets/images/dust.png");
         this.blueStar = p5.loadImage("/assets/images/blue-star.png");
         this.galaxyCore = p5.loadImage("/assets/images/core.png");
-
-        // const p = new PoissonDiskSampling({
-        //     shape: [900, 900, 3],
-        //     minDistance: 30,
-        //     maxDistance: 50,
-        //     tries: 300
-        // });
-        // const points = p.fill().filter((p: number[]) => {
-        //     const p0 = p[0] - 450;
-        //     const p1 = p[1] - 450;
-        //     return p0 * p0 + p1 * p1 < 450 * 450;
-        // });
-        // // const points = p.fill();
-        //
-        // const offsetVector = p5.createVector(-450, -450, 0);
-        // const galaxy: Array<p5Types.Vector> = [];
-        // for (let i = 0; i < points.length; i++) {
-        //     let [x, y, z] = points[i];
-        //     const nv = p5.createVector(x, y, z).add(offsetVector);
-        //     galaxy.push(nv);
-        // }
-        // this.setState({ galaxy });
     }
 
     handleSetup(p5: p5Types, canvasParentRef: Element) {
@@ -233,22 +214,20 @@ class App extends Component {
             cameraUp: p5.createVector(0, 1, 0)
         });
 
-        let r = 100;
+        const coreRadius = 100;
+        let r = coreRadius;
         let theta = 0;
-        const offsetThreshold: number = 10;
+        const offsetThreshold: number = 1;
         const spiral: Array<p5Types.Vector> = [];
-        const rRate = 4; // p5.random(2, 2.5);
-        const tRateDiv = 35; // p5.random(35, 55);
-        while (r <= 450) {
-            let zOffsetThreshold = offsetThreshold - r / (450 / offsetThreshold);
+        const rRate = p5.TWO_PI; // p5.random(2, 2.5);
+        const galaxyRadius = 400;
+        while (r <= galaxyRadius) {
+            let zOffsetThreshold = offsetThreshold - r / (galaxyRadius / offsetThreshold);
 
             for (let i = 0; i < 2; i++) {
                 let x = r * p5.cos(theta) + p5.random(-offsetThreshold, offsetThreshold);
                 let y = r * p5.sin(theta) + p5.random(-offsetThreshold, offsetThreshold);
                 let z = p5.random(-zOffsetThreshold, zOffsetThreshold);
-                // let x = r * p5.cos(theta);
-                // let y = r * p5.sin(theta);
-                // let z = 0;
                 if (i > 0) {
                     x *= -1;
                     y *= -1;
@@ -259,47 +238,76 @@ class App extends Component {
 
             // Increase the angle over time
             r += rRate;
-            theta -= rRate / tRateDiv;
+            theta -= 0.1;
         }
 
         const p = new PoissonDiskSampling({
-            shape: [900, 900, 12],
+            shape: [900, 900, 3],
             minDistance: 40,
             maxDistance: 45,
-            tries: 300
+            tries: 150
         });
         const points = p.fill().map((p: number[]) => {
             return p5.createVector(p[0] - 450, p[1] - 450, p[2]);
         });
 
+        const centerVector = p5.createVector(0, 0, 0);
+
         const galaxy: Array<p5Types.Vector> = [];
         for (let i = 0; i < points.length; i++) {
-            for (let j = 0; j < spiral.length; j++) {
-                if (points[i].dist(spiral[j]) <= 50) {
-                    galaxy.push(points[i]);
-                    break;
-                }
+            if (points[i].dist(centerVector) > galaxyRadius) {
+                continue;
+            }
+            if (points[i].dist(centerVector) < coreRadius) {
+                continue;
+            }
+            galaxy.push(points[i]);
+        }
+        const { triangles } = Delaunator.from(galaxy.map(s => [s.x, s.y]));
+        const coordinates = [];
+        for (let i = 0; i < triangles.length; i += 3) {
+            coordinates.push([
+                galaxy[triangles[i]],
+                galaxy[triangles[i + 1]],
+                galaxy[triangles[i + 2]]
+            ]);
+        }
+
+        const laneDict: any = {};
+        const lanes: any = [];
+        for (let i: number = 0; i < coordinates.length; i++) {
+            const triangle = coordinates[i];
+            for (let j: number = 0; j < triangle.length; j++) {
+                let p1 = !triangle[j + 1] ? triangle[0] : triangle[j];
+                let p2 = !triangle[j + 1] ? triangle[j] : triangle[j + 1];
+                if (p1.dist(p2) > 60) continue;
+                p1 = p1.copy().mult(2);
+                p2 = p2.copy().mult(2);
+                const dictKey = `${p1.toString()}:${p2.toString()}`;
+                if (laneDict[dictKey]) continue;
+                laneDict[dictKey] = true;
+
+                lanes.push(() => p5.line(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z));
             }
         }
-        this.setState({ galaxy, spiral });
+
+        this.setState({ galaxy, spiral, lanes });
 
         this.sg = p5.createGraphics(128, 128, p5.P2D);
-        this.pd = p5.createGraphics(128, 128, p5.P2D);
-        this.cg = p5.createGraphics(350, 350, p5.P2D);
+        this.dg = p5.createGraphics(128, 128, p5.P2D);
+        this.cg = p5.createGraphics(256, 256, p5.P2D);
 
         if (
             this.blueStar !== undefined &&
-            this.purpleDust !== undefined &&
+            this.dust !== undefined &&
             this.galaxyCore !== undefined
         ) {
             this.sg.image(this.blueStar, 0, 0);
-            this.pd.image(this.purpleDust, 0, 0);
+            this.dg.image(this.dust, 0, 0);
             this.cg.image(this.galaxyCore, 0, 0);
         }
 
-        p5.textFont(this.state.font);
-        p5.textSize(32);
-        p5.textAlign(p5.CENTER, p5.CENTER);
+        p5.blendMode(p5.ADD);
     }
 
     /**
@@ -341,44 +349,47 @@ class App extends Component {
      * @param orientation A number between 0 and 1. Anything above 1 will default to normal.
      */
     getUvArray(orientation: number): Array<{ u: number; v: number }> {
+        if (this.sg === undefined) return [];
+        const { width, height } = this.sg;
         switch (true) {
             case orientation <= 0.25: {
                 return [
-                    { u: 0, v: 128 },
+                    { u: 0, v: height },
                     { u: 0, v: 0 },
-                    { u: 128, v: 0 },
-                    { u: 128, v: 128 }
+                    { u: width, v: 0 },
+                    { u: width, v: height }
                 ];
             }
             case orientation <= 0.5: {
                 return [
-                    { u: 128, v: 128 },
-                    { u: 0, v: 128 },
+                    { u: width, v: height },
+                    { u: 0, v: height },
                     { u: 0, v: 0 },
-                    { u: 128, v: 0 }
+                    { u: width, v: 0 }
                 ];
             }
             case orientation <= 0.75: {
                 return [
-                    { u: 128, v: 0 },
-                    { u: 128, v: 128 },
-                    { u: 0, v: 128 },
+                    { u: width, v: 0 },
+                    { u: width, v: height },
+                    { u: 0, v: height },
                     { u: 0, v: 0 }
                 ];
             }
             default: {
                 return [
                     { u: 0, v: 0 },
-                    { u: 128, v: 0 },
-                    { u: 128, v: 128 },
-                    { u: 0, v: 128 }
+                    { u: width, v: 0 },
+                    { u: width, v: height },
+                    { u: 0, v: height }
                 ];
             }
         }
     }
 
     handleDraw(p5: p5Types) {
-        const { galaxy, spiral, camera, cameraCenter, cameraUp } = this.state;
+        const frameStart = Date.now();
+        const { galaxy, spiral, lanes, camera, cameraCenter, cameraUp } = this.state;
         PubSub.publish("game-frame", p5.frameCount);
 
         if (
@@ -386,7 +397,7 @@ class App extends Component {
             cameraUp === undefined ||
             cameraCenter === undefined ||
             this.sg === undefined ||
-            this.pd === undefined ||
+            this.dg === undefined ||
             this.cg === undefined
         )
             return;
@@ -414,9 +425,9 @@ class App extends Component {
         p5.texture(this.cg);
         const uvArray = [
             { u: 0, v: 0 },
-            { u: 256, v: 0 },
-            { u: 256, v: 256 },
-            { u: 0, v: 256 }
+            { u: this.cg.width, v: 0 },
+            { u: this.cg.width, v: this.cg.height },
+            { u: 0, v: this.cg.height }
         ];
         for (let i = 0; i < squareVertices.length; i++) {
             const sv = squareVertices[i];
@@ -427,60 +438,86 @@ class App extends Component {
         p5.endShape(p5.CLOSE);
         p5.pop();
 
-        let starCount = 0;
-        for (let i: number = 0; i < galaxy.length; i++) {
-            const vector = galaxy[i];
-            const star = this.getStarType(vector);
-            const { x, y, z } = vector;
-
-            p5.push();
-            p5.translate(x, y, z);
-            // if (hash > 0.7) {
-            p5.tint(star.color);
-            p5.beginShape();
-            p5.texture(this.sg);
-            for (let i = 0; i < squareVertices.length; i++) {
-                const sv = squareVertices[i];
-                const uv = this.getUvArray(1)[i];
-                const lsv = sv
-                    .copy()
-                    .mult(map(star.radius, 0.00001, 10, 0.3, 1))
-                    .add(vector);
-                p5.vertex(lsv.x, lsv.y, lsv.z, uv.u, uv.v);
-            }
-            p5.endShape(p5.CLOSE);
-            starCount++;
-            // }
-            p5.pop();
-        }
-
-        for (let i: number = 0; i < spiral.length; i++) {
-            const vector = spiral[i];
+        const startLoop = (vector: p5Types.Vector, texture: p5Types.Graphics) => {
             const star = this.getStarType(vector);
             const { x, y, z } = vector;
             const hash: number = map(vectorHash(vector, 1000), 0, 1000, 0, 1);
 
             p5.push();
             p5.translate(x, y, z);
-            // if (hash < 0.7) {
             p5.tint(star.color);
             p5.beginShape();
-            p5.texture(this.pd);
+            p5.texture(texture);
+
+            return { star, x, y, z, hash };
+        };
+
+        let starCount = 0;
+        for (let i: number = 0; i < galaxy.length; i++) {
+            const galaxyVector = galaxy[i];
+            const { star, x, y, z, hash } = startLoop(galaxyVector, this.sg);
+
             for (let i = 0; i < squareVertices.length; i++) {
                 const sv = squareVertices[i];
-                const uv = this.getUvArray(map(hash, 0, 0.2, 0, 1))[i];
+                const uv = this.getUvArray(1)[i];
                 const lsv = sv
                     .copy()
-                    .mult(map(star.radius, 0.00001, 10, 10, 10))
-                    .add(vector);
+                    .mult(map(star.radius, 0.00001, 10, 0.3, 1))
+                    .add(galaxyVector);
                 p5.vertex(lsv.x, lsv.y, lsv.z, uv.u, uv.v);
             }
             p5.endShape(p5.CLOSE);
-            // }
+            starCount++;
+            p5.pop();
+
+            p5.push();
+            p5.translate(x, y, z);
+            p5.tint(star.color);
+            p5.beginShape();
+            p5.texture(this.dg);
+            for (let i = 0; i < squareVertices.length; i++) {
+                const sv = squareVertices[i];
+                const uv = this.getUvArray(hash)[i];
+                const lsv = sv.copy().mult(5).add(galaxyVector);
+                p5.vertex(lsv.x, lsv.y, lsv.z, uv.u, uv.v);
+            }
+            p5.endShape(p5.CLOSE);
+            p5.pop();
+        }
+
+        // console.time("lines");
+        for (let i: number = 0; i < lanes.length; i++) {
+            p5.push();
+            p5.stroke("#8888FF11");
+            p5.strokeWeight(2);
+            p5.fill("#8888FF11");
+            lanes[i]();
+            p5.pop();
+        }
+        // console.timeEnd("lines");
+
+        for (let i: number = 0; i < spiral.length; i++) {
+            const spiralVector = spiral[i];
+            const { hash } = startLoop(spiralVector, this.dg);
+
+            for (let i = 0; i < squareVertices.length; i++) {
+                const sv = squareVertices[i];
+                const uv = this.getUvArray(hash)[i];
+                const lsv = sv.copy().mult(map(hash, 0, 1, 10, 15)).add(spiralVector);
+                p5.vertex(lsv.x, lsv.y, lsv.z, uv.u, uv.v);
+            }
+            p5.endShape(p5.CLOSE);
             p5.pop();
         }
 
         this.logStuff("star count", starCount);
+        this.logStuff("lane count", lanes.length);
+        this.logStuff("spiral points", spiral.length);
+        this.logStuff("dust clouds", starCount);
+        const frameTime = Date.now() - frameStart;
+        if (frameTime >= 17) {
+            console.log("FDT", frameTime, "FPS", (1000 / frameTime).toFixed(2)); // eslint-disable-line
+        }
     }
 
     render() {
